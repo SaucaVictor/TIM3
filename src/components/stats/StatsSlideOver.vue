@@ -17,6 +17,7 @@ import {
   Coins,
   CheckCircle2,
   CircleDollarSign,
+  AlertCircle,
   Loader,
   Calendar,
   Folder,
@@ -111,8 +112,12 @@ const selectedTimeframe = ref<TimeFrame>('1M');
 // Selected Bar on chart
 const selectedBarIndex = ref<number | null>(null);
 
-// Reset bar selection on timeframe or project switch
-watch([selectedTimeframe, selectedProjectId], () => {
+// Anchor date for period intervals
+const anchorDate = ref<Date>(new Date());
+const datePickerInput = ref<HTMLInputElement | null>(null);
+
+// Reset bar selection on timeframe switch
+watch(selectedTimeframe, () => {
   selectedBarIndex.value = null;
 });
 
@@ -187,6 +192,8 @@ watch(
     if (open) {
       selectedProjectId.value = null;
       selectedBarIndex.value = null;
+      selectedTimeframe.value = '1M';
+      anchorDate.value = new Date();
       if (isViewingOtherMember.value) {
         if (route.query.memberStats !== targetUserId.value) {
           router.push({ query: { ...route.query, memberStats: targetUserId.value } });
@@ -208,6 +215,8 @@ watch(
     } else {
       selectedProjectId.value = null;
       selectedBarIndex.value = null;
+      selectedTimeframe.value = '1M';
+      anchorDate.value = new Date();
     }
   },
   { immediate: true }
@@ -216,7 +225,6 @@ watch(
 watch(
   () => selectedProjectId.value,
   (projId) => {
-    selectedTimeframe.value = '1M';
     if (projId) {
       if (route.query.statsProject !== projId) {
         router.push({ query: { ...route.query, statsProject: projId } });
@@ -260,6 +268,8 @@ watch(
 function handleClose() {
   selectedProjectId.value = null;
   selectedBarIndex.value = null;
+  selectedTimeframe.value = '1M';
+  anchorDate.value = new Date();
   emit('close');
   if (route.query.memberStats || route.query.stats || route.query.statsProject) {
     router.back();
@@ -268,7 +278,6 @@ function handleClose() {
 
 function handleCloseSubSlide() {
   selectedProjectId.value = null;
-  selectedBarIndex.value = null;
   if (route.query.statsProject) {
     router.back();
   }
@@ -284,26 +293,116 @@ const currentProject = computed(() => {
   return null;
 });
 
-// Timeframe Filtering Logic
-const filteredEntries = computed(() => {
-  const cutoff = new Date();
+// Helper functions for calendar interval calculation
+function getStartOfWeek(d: Date): Date {
+  const date = new Date(d);
+  const day = date.getDay();
+  const diff = (day + 6) % 7; // Monday = 0
+  date.setDate(date.getDate() - diff);
+  date.setHours(0, 0, 0, 0);
+  return date;
+}
+
+function getEndOfWeek(d: Date): Date {
+  const start = getStartOfWeek(d);
+  const end = new Date(start);
+  end.setDate(start.getDate() + 6);
+  end.setHours(23, 59, 59, 999);
+  return end;
+}
+
+const currentInterval = computed(() => {
   const tf = selectedTimeframe.value;
+  const d = anchorDate.value;
 
   if (tf === '1W') {
-    cutoff.setDate(cutoff.getDate() - 7);
-  } else if (tf === '1M') {
-    cutoff.setDate(cutoff.getDate() - 30);
-  } else if (tf === '6M') {
-    cutoff.setMonth(cutoff.getMonth() - 6);
-  } else if (tf === '1Y') {
-    cutoff.setFullYear(cutoff.getFullYear() - 1);
+    const start = getStartOfWeek(d);
+    const end = getEndOfWeek(d);
+    const startMonth = start.toLocaleDateString(undefined, { month: 'short' });
+    const endMonth = end.toLocaleDateString(undefined, { month: 'short' });
+    const label = startMonth === endMonth
+      ? `${startMonth} ${start.getDate()} - ${end.getDate()}, ${start.getFullYear()}`
+      : `${startMonth} ${start.getDate()} - ${endMonth} ${end.getDate()}, ${end.getFullYear()}`;
+    return { start, end, label };
   }
 
-  const cutoffTime = tf === 'ALL' ? 0 : cutoff.getTime();
+  if (tf === '1M') {
+    const start = new Date(d.getFullYear(), d.getMonth(), 1, 0, 0, 0, 0);
+    const end = new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59, 999);
+    const label = d.toLocaleDateString(undefined, { month: 'short', year: 'numeric' });
+    return { start, end, label };
+  }
+
+  if (tf === '6M') {
+    const end = new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59, 999);
+    const start = new Date(d.getFullYear(), d.getMonth() - 5, 1, 0, 0, 0, 0);
+    const label = `${start.toLocaleDateString(undefined, { month: 'short' })} - ${end.toLocaleDateString(undefined, { month: 'short', year: 'numeric' })}`;
+    return { start, end, label };
+  }
+
+  if (tf === '1Y') {
+    const start = new Date(d.getFullYear(), 0, 1, 0, 0, 0, 0);
+    const end = new Date(d.getFullYear(), 11, 31, 23, 59, 59, 999);
+    const label = `${d.getFullYear()}`;
+    return { start, end, label };
+  }
+
+  // ALL
+  return {
+    start: new Date(0),
+    end: new Date(8640000000000000),
+    label: 'All Time',
+  };
+});
+
+function navigateInterval(direction: number) {
+  const tf = selectedTimeframe.value;
+  const next = new Date(anchorDate.value);
+
+  if (tf === '1W') {
+    next.setDate(next.getDate() + direction * 7);
+  } else if (tf === '1M') {
+    next.setMonth(next.getMonth() + direction);
+  } else if (tf === '6M') {
+    next.setMonth(next.getMonth() + direction * 6);
+  } else if (tf === '1Y') {
+    next.setFullYear(next.getFullYear() + direction);
+  } else if (tf === 'ALL') {
+    next.setFullYear(next.getFullYear() + direction);
+  }
+
+  anchorDate.value = next;
+  selectedBarIndex.value = null;
+}
+
+function triggerDatePicker() {
+  const el = datePickerInput.value;
+  if (!el) return;
+  if (typeof (el as any).showPicker === 'function') {
+    (el as any).showPicker();
+  } else {
+    el.click();
+  }
+}
+
+function handleDatePicked(e: Event) {
+  const target = e.target as HTMLInputElement;
+  if (target.value) {
+    anchorDate.value = new Date(target.value + 'T12:00:00');
+    selectedBarIndex.value = null;
+  }
+}
+
+// Timeframe Filtering Logic bounded by interval
+const filteredEntries = computed(() => {
+  const { start, end } = currentInterval.value;
+  const startTime = start.getTime();
+  const endTime = end.getTime();
 
   return sourceEntries.value.filter((e) => {
     if (!e.started_at) return false;
-    if (cutoffTime > 0 && new Date(e.started_at).getTime() < cutoffTime) return false;
+    const t = new Date(e.started_at).getTime();
+    if (t < startTime || t > endTime) return false;
     if (selectedProjectId.value && e.project_id !== selectedProjectId.value) return false;
     return true;
   });
@@ -315,8 +414,14 @@ function isEntryInBar(entry: TimeEntry, barIdx: number, tf: TimeFrame): boolean 
   const d = new Date(entry.started_at);
 
   if (tf === '1W') {
-    const dayIdx = (d.getDay() + 6) % 7;
-    return dayIdx === barIdx;
+    const start = getStartOfWeek(anchorDate.value);
+    const targetDate = new Date(start);
+    targetDate.setDate(start.getDate() + barIdx);
+    return (
+      d.getFullYear() === targetDate.getFullYear() &&
+      d.getMonth() === targetDate.getMonth() &&
+      d.getDate() === targetDate.getDate()
+    );
   }
 
   if (tf === '1M') {
@@ -330,14 +435,25 @@ function isEntryInBar(entry: TimeEntry, barIdx: number, tf: TimeFrame): boolean 
     const target = intervals[barIdx];
     if (!target) return false;
     const day = d.getDate();
-    return day >= target.minDay && day <= target.maxDay;
+    return (
+      d.getFullYear() === anchorDate.value.getFullYear() &&
+      d.getMonth() === anchorDate.value.getMonth() &&
+      day >= target.minDay &&
+      day <= target.maxDay
+    );
   }
 
-  // 6M | 1Y | ALL
-  const monthCount = tf === '6M' ? 6 : 12;
-  const targetDate = new Date();
-  targetDate.setMonth(targetDate.getMonth() - (monthCount - 1 - barIdx));
-  return d.getFullYear() === targetDate.getFullYear() && d.getMonth() === targetDate.getMonth();
+  if (tf === '6M') {
+    const targetDate = new Date(anchorDate.value.getFullYear(), anchorDate.value.getMonth() - (5 - barIdx), 1);
+    return d.getFullYear() === targetDate.getFullYear() && d.getMonth() === targetDate.getMonth();
+  }
+
+  if (tf === '1Y') {
+    return d.getFullYear() === anchorDate.value.getFullYear() && d.getMonth() === barIdx;
+  }
+
+  // ALL
+  return d.getMonth() === barIdx;
 }
 
 // Active entries (filtered by timeframe AND selected chart column if any)
@@ -369,10 +485,12 @@ const analyticsData = computed(() => {
   let paidEarnings = 0;
   let approvedEarnings = 0;
   let awaitingEarnings = 0;
+  let notPaidEarnings = 0;
 
   let paidMinutes = 0;
   let approvedMinutes = 0;
   let awaitingMinutes = 0;
+  let notPaidMinutes = 0;
 
   const projectMap = new Map<string, {
     project: Project;
@@ -417,6 +535,9 @@ const analyticsData = computed(() => {
     } else if (status === 'approved') {
       approvedEarnings += earnings;
       approvedMinutes += durationMinutes;
+    } else if (status === 'not_paid') {
+      notPaidEarnings += earnings;
+      notPaidMinutes += durationMinutes;
     } else {
       awaitingEarnings += earnings;
       awaitingMinutes += durationMinutes;
@@ -480,9 +601,11 @@ const analyticsData = computed(() => {
     paidEarnings: Math.round(paidEarnings * 100) / 100,
     approvedEarnings: Math.round(approvedEarnings * 100) / 100,
     awaitingEarnings: Math.round(awaitingEarnings * 100) / 100,
+    notPaidEarnings: Math.round(notPaidEarnings * 100) / 100,
     paidMinutes,
     approvedMinutes,
     awaitingMinutes,
+    notPaidMinutes,
     projectBreakdown,
     taskBreakdown,
     activeRateInfo,
@@ -513,45 +636,52 @@ const barChartData = computed<{ bars: BarItem[]; averageMinutes: number; average
   const entries = filteredEntries.value;
 
   if (tf === '1W') {
-    // 7 days of the week: Mon to Sun
+    // 7 exact days of the selected week (Mon to Sun) - No wrap-around!
     const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-    const dayBuckets: { [key: number]: { minutes: number; earnings: number } } = {
-      0: { minutes: 0, earnings: 0 },
-      1: { minutes: 0, earnings: 0 },
-      2: { minutes: 0, earnings: 0 },
-      3: { minutes: 0, earnings: 0 },
-      4: { minutes: 0, earnings: 0 },
-      5: { minutes: 0, earnings: 0 },
-      6: { minutes: 0, earnings: 0 },
-    };
+    const start = getStartOfWeek(anchorDate.value);
+    const dayBuckets = days.map((dayName, idx) => {
+      const bDate = new Date(start);
+      bDate.setDate(start.getDate() + idx);
+      return {
+        label: dayName,
+        subLabel: String(bDate.getDate()),
+        year: bDate.getFullYear(),
+        month: bDate.getMonth(),
+        date: bDate.getDate(),
+        minutes: 0,
+        earnings: 0,
+      };
+    });
 
     entries.forEach((e) => {
       if (!e.started_at) return;
       const d = new Date(e.started_at);
-      const dayIdx = (d.getDay() + 6) % 7; // Convert Sun=0 to Mon=0
-      const { earnings, durationMinutes } = calculateEntryEarnings(
-        e,
-        projects.value.find((p) => p.id === e.project_id),
-        targetProfile.value
+      const target = dayBuckets.find(
+        (b) => b.year === d.getFullYear() && b.month === d.getMonth() && b.date === d.getDate()
       );
-      dayBuckets[dayIdx].minutes += durationMinutes;
-      dayBuckets[dayIdx].earnings += earnings;
+      if (target) {
+        const { earnings, durationMinutes } = calculateEntryEarnings(
+          e,
+          projects.value.find((p) => p.id === e.project_id),
+          targetProfile.value
+        );
+        target.minutes += durationMinutes;
+        target.earnings += earnings;
+      }
     });
 
-    const maxMinutes = Math.max(1, ...Object.values(dayBuckets).map((b) => b.minutes));
-    const bars: BarItem[] = days.map((dayName, idx) => {
-      const b = dayBuckets[idx];
-      return {
-        label: dayName,
-        minutes: b.minutes,
-        earnings: Math.round(b.earnings * 100) / 100,
-        heightPercent: Math.round((b.minutes / maxMinutes) * 100),
-        isMax: b.minutes === maxMinutes && b.minutes > 0,
-      };
-    });
+    const maxMinutes = Math.max(1, ...dayBuckets.map((b) => b.minutes));
+    const bars: BarItem[] = dayBuckets.map((b) => ({
+      label: b.label,
+      subLabel: b.subLabel,
+      minutes: b.minutes,
+      earnings: Math.round(b.earnings * 100) / 100,
+      heightPercent: Math.round((b.minutes / maxMinutes) * 100),
+      isMax: b.minutes === maxMinutes && b.minutes > 0,
+    }));
 
-    const totalMin = Object.values(dayBuckets).reduce((acc, b) => acc + b.minutes, 0);
-    const totalEarn = Object.values(dayBuckets).reduce((acc, b) => acc + b.earnings, 0);
+    const totalMin = dayBuckets.reduce((acc, b) => acc + b.minutes, 0);
+    const totalEarn = dayBuckets.reduce((acc, b) => acc + b.earnings, 0);
 
     return {
       bars,
@@ -561,7 +691,7 @@ const barChartData = computed<{ bars: BarItem[]; averageMinutes: number; average
   }
 
   if (tf === '1M') {
-    // 5 weekly intervals (1-7, 8-14, 15-21, 22-28, 29-31) like Revolut screenshot!
+    // Intervals of the selected month
     const intervals = [
       { label: '1–7', minDay: 1, maxDay: 7 },
       { label: '8–14', minDay: 8, maxDay: 14 },
@@ -578,16 +708,22 @@ const barChartData = computed<{ bars: BarItem[]; averageMinutes: number; average
 
     entries.forEach((e) => {
       if (!e.started_at) return;
-      const day = new Date(e.started_at).getDate();
-      const targetBucket = buckets.find((b) => day >= b.minDay && day <= b.maxDay);
-      if (targetBucket) {
-        const { earnings, durationMinutes } = calculateEntryEarnings(
-          e,
-          projects.value.find((p) => p.id === e.project_id),
-          targetProfile.value
-        );
-        targetBucket.minutes += durationMinutes;
-        targetBucket.earnings += earnings;
+      const d = new Date(e.started_at);
+      if (
+        d.getFullYear() === anchorDate.value.getFullYear() &&
+        d.getMonth() === anchorDate.value.getMonth()
+      ) {
+        const day = d.getDate();
+        const targetBucket = buckets.find((b) => day >= b.minDay && day <= b.maxDay);
+        if (targetBucket) {
+          const { earnings, durationMinutes } = calculateEntryEarnings(
+            e,
+            projects.value.find((p) => p.id === e.project_id),
+            targetProfile.value
+          );
+          targetBucket.minutes += durationMinutes;
+          targetBucket.earnings += earnings;
+        }
       }
     });
 
@@ -610,28 +746,125 @@ const barChartData = computed<{ bars: BarItem[]; averageMinutes: number; average
     };
   }
 
-  // 6M or 1Y or ALL: monthly intervals
-  const monthCount = tf === '6M' ? 6 : 12;
-  const monthBuckets: { label: string; year: number; month: number; minutes: number; earnings: number }[] = [];
+  if (tf === '6M') {
+    // 6 consecutive months ending in selected month
+    const monthBuckets: { label: string; year: number; month: number; minutes: number; earnings: number }[] = [];
+    for (let i = 5; i >= 0; i--) {
+      const d = new Date(anchorDate.value.getFullYear(), anchorDate.value.getMonth() - i, 1);
+      monthBuckets.push({
+        label: d.toLocaleString(undefined, { month: 'short' }),
+        year: d.getFullYear(),
+        month: d.getMonth(),
+        minutes: 0,
+        earnings: 0,
+      });
+    }
 
-  for (let i = monthCount - 1; i >= 0; i--) {
-    const d = new Date();
-    d.setMonth(d.getMonth() - i);
-    monthBuckets.push({
-      label: d.toLocaleString(undefined, { month: 'short' }),
-      year: d.getFullYear(),
-      month: d.getMonth(),
+    entries.forEach((e) => {
+      if (!e.started_at) return;
+      const d = new Date(e.started_at);
+      const y = d.getFullYear();
+      const m = d.getMonth();
+      const target = monthBuckets.find((b) => b.year === y && b.month === m);
+      if (target) {
+        const { earnings, durationMinutes } = calculateEntryEarnings(
+          e,
+          projects.value.find((p) => p.id === e.project_id),
+          targetProfile.value
+        );
+        target.minutes += durationMinutes;
+        target.earnings += earnings;
+      }
+    });
+
+    const maxMinutes = Math.max(1, ...monthBuckets.map((b) => b.minutes));
+    const bars: BarItem[] = monthBuckets.map((b) => ({
+      label: b.label,
+      minutes: b.minutes,
+      earnings: Math.round(b.earnings * 100) / 100,
+      heightPercent: Math.round((b.minutes / maxMinutes) * 100),
+      isMax: b.minutes === maxMinutes && b.minutes > 0,
+    }));
+
+    const totalMin = monthBuckets.reduce((acc, b) => acc + b.minutes, 0);
+    const totalEarn = monthBuckets.reduce((acc, b) => acc + b.earnings, 0);
+
+    return {
+      bars,
+      averageMinutes: Math.round(totalMin / monthBuckets.length),
+      averageEarnings: Math.round(totalEarn / monthBuckets.length),
+    };
+  }
+
+  if (tf === '1Y') {
+    // 12 months (Jan-Dec) of selected calendar year
+    const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const buckets = monthNames.map((name, idx) => ({
+      label: name,
+      month: idx,
+      year: anchorDate.value.getFullYear(),
       minutes: 0,
       earnings: 0,
+    }));
+
+    entries.forEach((e) => {
+      if (!e.started_at) return;
+      const d = new Date(e.started_at);
+      if (d.getFullYear() === anchorDate.value.getFullYear()) {
+        const m = d.getMonth();
+        if (buckets[m]) {
+          const { earnings, durationMinutes } = calculateEntryEarnings(
+            e,
+            projects.value.find((p) => p.id === e.project_id),
+            targetProfile.value
+          );
+          buckets[m].minutes += durationMinutes;
+          buckets[m].earnings += earnings;
+        }
+      }
     });
+
+    const maxMinutes = Math.max(1, ...buckets.map((b) => b.minutes));
+    const bars: BarItem[] = buckets.map((b) => ({
+      label: b.label,
+      minutes: b.minutes,
+      earnings: Math.round(b.earnings * 100) / 100,
+      heightPercent: Math.round((b.minutes / maxMinutes) * 100),
+      isMax: b.minutes === maxMinutes && b.minutes > 0,
+    }));
+
+    const totalMin = buckets.reduce((acc, b) => acc + b.minutes, 0);
+    const totalEarn = buckets.reduce((acc, b) => acc + b.earnings, 0);
+
+    return {
+      bars,
+      averageMinutes: Math.round(totalMin / 12),
+      averageEarnings: Math.round(totalEarn / 12),
+    };
   }
+
+  // ALL: Years present or recent years
+  const startYear = entries.length > 0
+    ? Math.min(...entries.map((e) => new Date(e.started_at).getFullYear()))
+    : new Date().getFullYear();
+  const endYear = new Date().getFullYear();
+  const years: number[] = [];
+  for (let y = Math.max(startYear, endYear - 4); y <= endYear; y++) {
+    years.push(y);
+  }
+  if (years.length === 0) years.push(endYear);
+
+  const yearBuckets = years.map((y) => ({
+    label: String(y),
+    year: y,
+    minutes: 0,
+    earnings: 0,
+  }));
 
   entries.forEach((e) => {
     if (!e.started_at) return;
     const d = new Date(e.started_at);
-    const y = d.getFullYear();
-    const m = d.getMonth();
-    const target = monthBuckets.find((b) => b.year === y && b.month === m);
+    const target = yearBuckets.find((b) => b.year === d.getFullYear());
     if (target) {
       const { earnings, durationMinutes } = calculateEntryEarnings(
         e,
@@ -643,8 +876,8 @@ const barChartData = computed<{ bars: BarItem[]; averageMinutes: number; average
     }
   });
 
-  const maxMinutes = Math.max(1, ...monthBuckets.map((b) => b.minutes));
-  const bars: BarItem[] = monthBuckets.map((b) => ({
+  const maxMinutes = Math.max(1, ...yearBuckets.map((b) => b.minutes));
+  const bars: BarItem[] = yearBuckets.map((b) => ({
     label: b.label,
     minutes: b.minutes,
     earnings: Math.round(b.earnings * 100) / 100,
@@ -652,13 +885,13 @@ const barChartData = computed<{ bars: BarItem[]; averageMinutes: number; average
     isMax: b.minutes === maxMinutes && b.minutes > 0,
   }));
 
-  const totalMin = monthBuckets.reduce((acc, b) => acc + b.minutes, 0);
-  const totalEarn = monthBuckets.reduce((acc, b) => acc + b.earnings, 0);
+  const totalMin = yearBuckets.reduce((acc, b) => acc + b.minutes, 0);
+  const totalEarn = yearBuckets.reduce((acc, b) => acc + b.earnings, 0);
 
   return {
     bars,
-    averageMinutes: Math.round(totalMin / monthBuckets.length),
-    averageEarnings: Math.round(totalEarn / monthBuckets.length),
+    averageMinutes: Math.round(totalMin / yearBuckets.length),
+    averageEarnings: Math.round(totalEarn / yearBuckets.length),
   };
 });
 
@@ -669,14 +902,14 @@ const activeDisplayMetrics = computed(() => {
     return {
       minutesText: formatMinutes(selectedBar.minutes),
       earningsText: `${detectedCurrency.value} ${selectedBar.earnings.toFixed(2)}`,
-      subLabel: `${selectedBar.label} interval`,
+      subLabel: `${selectedBar.label}${selectedBar.subLabel ? ' (' + selectedBar.subLabel + ')' : ''} interval`,
       isSelected: true,
     };
   }
   return {
     minutesText: formatMinutes(analyticsData.value.totalMinutes),
     earningsText: `${detectedCurrency.value} ${analyticsData.value.totalEarnings.toFixed(2)}`,
-    subLabel: selectedTimeframe.value === '1M' ? 'This month' : selectedTimeframe.value === '1W' ? 'Past 7 days' : selectedTimeframe.value,
+    subLabel: currentInterval.value.label,
     isSelected: false,
   };
 });
@@ -795,6 +1028,50 @@ function toggleSelectBar(idx: number) {
               </button>
             </div>
 
+            <!-- Interval Navigation Bar (< Sept 16 - 23, 2026 [calendar icon] >) -->
+            <div v-if="selectedTimeframe !== 'ALL'" class="bg-[#1e1e20] border border-[#2d2d30] px-3 py-2 rounded-lg flex items-center justify-between gap-2 select-none">
+              <button
+                type="button"
+                @click="navigateInterval(-1)"
+                class="p-1 rounded-md text-[#888888] hover:text-white hover:bg-[#28282b] active:scale-90 transition-all cursor-pointer"
+                title="Previous interval"
+              >
+                <ChevronLeft class="w-5 h-5" />
+              </button>
+
+              <div class="flex items-center gap-2">
+                <span class="font-bold text-white tracking-tight">
+                  {{ currentInterval.label }}
+                </span>
+                <div class="relative flex items-center">
+                  <button
+                    type="button"
+                    @click="triggerDatePicker"
+                    class="p-1 rounded-md text-[#5bb8f5] hover:text-[#7ac0e3] hover:bg-[#28282b] transition-all cursor-pointer"
+                    title="Choose date / interval"
+                  >
+                    <Calendar class="w-5 h-5" />
+                  </button>
+                  <input
+                    ref="datePickerInput"
+                    type="date"
+                    @change="handleDatePicked"
+                    style="color-scheme: dark;"
+                    class="absolute inset-0 opacity-0 pointer-events-none w-0 h-0"
+                  />
+                </div>
+              </div>
+
+              <button
+                type="button"
+                @click="navigateInterval(1)"
+                class="p-1 rounded-md text-[#888888] hover:text-white hover:bg-[#28282b] active:scale-90 transition-all cursor-pointer"
+                title="Next interval"
+              >
+                <ChevronRight class="w-5 h-5" />
+              </button>
+            </div>
+
             <!-- 1. HERO TOTALS & INTERACTIVE BAR CHART CARD -->
             <div class="bg-[#252525] p-4 rounded-lg space-y-4" @click="selectedBarIndex = null">
               <!-- Top Row: Hours & Money Metrics (Updates when bar is selected) -->
@@ -855,23 +1132,25 @@ function toggleSelectBar(idx: number) {
                     class="flex-1 text-center truncate cursor-pointer transition-colors"
                     :class="selectedBarIndex === idx ? 'text-[#5bb8f5] font-bold' : 'hover:text-white'"
                   >
-                    {{ bar.label }}
+                    <div>{{ bar.label }}</div>
+                    <div v-if="bar.subLabel" class="text-[9px] opacity-70">{{ bar.subLabel }}</div>
                   </div>
                 </div>
               </div>
             </div>
 
+            <!-- 2. STATS STATUS CARDS (Awaiting, Approved, Paid, Not Paid) -->
             <div>
-              <div class="grid grid-cols-3 gap-2">
+              <div class="grid grid-cols-2 gap-2">
                 <!-- Awaiting Block -->
                 <div class="bg-[#252525] p-3 rounded-lg flex flex-col justify-between space-y-1.5 border border-transparent hover:border-[#333333] transition-colors">
                   <div class="flex items-center justify-end gap-1.5 text-[#888888] font-semibold">
                     <Loader class="w-5 h-5 shrink-0" />
                   </div>
-                  <div class="font-bold text-white truncate">
+                  <div class="font-bold text-white truncate text-sm sm:text-base">
                     {{ formatMinutes(analyticsData.awaitingMinutes) }}
                   </div>
-                  <div class="text-[#888888] truncate">
+                  <div class="text-[#888888] truncate text-xs">
                     {{ detectedCurrency }} {{ analyticsData.awaitingEarnings.toFixed(2) }}
                   </div>
                 </div>
@@ -881,10 +1160,10 @@ function toggleSelectBar(idx: number) {
                   <div class="flex items-center justify-end gap-1.5 text-emerald-400 font-semibold">
                     <CheckCircle2 class="w-5 h-5 shrink-0" />
                   </div>
-                  <div class="font-bold text-white truncate">
+                  <div class="font-bold text-white truncate text-sm sm:text-base">
                     {{ formatMinutes(analyticsData.approvedMinutes) }}
                   </div>
-                  <div class="text-emerald-400 truncate">
+                  <div class="text-emerald-400 truncate text-xs">
                     {{ detectedCurrency }} {{ analyticsData.approvedEarnings.toFixed(2) }}
                   </div>
                 </div>
@@ -894,11 +1173,24 @@ function toggleSelectBar(idx: number) {
                   <div class="flex items-center justify-end gap-1.5 text-emerald-400 font-semibold">
                     <CircleDollarSign class="w-5 h-5 shrink-0" />
                   </div>
-                  <div class="font-bold text-white truncate">
+                  <div class="font-bold text-white truncate text-sm sm:text-base">
                     {{ formatMinutes(analyticsData.paidMinutes) }}
                   </div>
-                  <div class="text-emerald-400 truncate">
+                  <div class="text-emerald-400 truncate text-xs">
                     {{ detectedCurrency }} {{ analyticsData.paidEarnings.toFixed(2) }}
+                  </div>
+                </div>
+
+                <!-- Not Paid Block -->
+                <div class="bg-[#252525] p-3 rounded-lg flex flex-col justify-between space-y-1.5 border border-transparent hover:border-rose-500/30 transition-colors">
+                  <div class="flex items-center justify-end gap-1.5 text-rose-400 font-semibold">
+                    <AlertCircle class="w-5 h-5 shrink-0" />
+                  </div>
+                  <div class="font-bold text-white truncate text-sm sm:text-base">
+                    {{ formatMinutes(analyticsData.notPaidMinutes) }}
+                  </div>
+                  <div class="text-rose-400 truncate text-xs">
+                    {{ detectedCurrency }} {{ analyticsData.notPaidEarnings.toFixed(2) }}
                   </div>
                 </div>
               </div>
@@ -906,7 +1198,7 @@ function toggleSelectBar(idx: number) {
 
             <!-- 3A. MAIN VIEW: BREAKDOWN BY PROJECT -->
             <div v-if="!selectedProjectId" class="space-y-2">
-              <div v-if="analyticsData.projectBreakdown.length > 0" class="bg-[#252525] p-2 rounded-lg space-y-1 max-h-72 overflow-y-auto">
+              <div v-if="analyticsData.projectBreakdown.length > 0" class="bg-[#252525] p-2 rounded-lg space-y-1 max-h-90 overflow-y-auto">
                 <div
                   v-for="item in analyticsData.projectBreakdown"
                   :key="item.project.id"

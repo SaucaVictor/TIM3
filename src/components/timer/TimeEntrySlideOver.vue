@@ -23,6 +23,7 @@ import {
   Loader2,
   Loader,
   Lock,
+  AlertCircle,
 } from 'lucide-vue-next';
 
 interface Props {
@@ -519,6 +520,10 @@ async function handleDelete() {
                     <CircleDollarSign class="w-3.5 h-3.5 text-emerald-400" />
                     <span class="text-emerald-400">Paid</span>
                   </template>
+                  <template v-else-if="selectedStatus === 'not_paid'">
+                    <AlertCircle class="w-3.5 h-3.5 text-rose-400" />
+                    <span class="text-rose-400">Not Paid</span>
+                  </template>
                 </div>
               </Transition>
             </div>
@@ -741,11 +746,11 @@ async function handleDelete() {
               <!-- 7. Hours Status Card (Owner Only) -->
               <div v-if="isOwner" class="bg-[#252525] p-4 rounded-lg space-y-2">
                 <div class="font-bold text-white uppercase tracking-wider">Hours Status</div>
-                <div class="grid grid-cols-3 gap-2">
+                <div class="grid grid-cols-2 sm:grid-cols-4 gap-2">
                   <button
                     type="button"
                     @click="selectedStatus = 'awaiting'"
-                    class="py-2 px-2.5 rounded-lg font-semibold flex items-center justify-center gap-1.5 transition-all cursor-pointer border text-xs"
+                    class="py-2 px-2 rounded-lg font-semibold flex items-center justify-center gap-1.5 transition-all cursor-pointer border text-xs"
                     :class="selectedStatus === 'awaiting' ? 'bg-[#161618] text-white border-[#888888]' : 'bg-[#161618] text-[#666666] border-[#333333]'"
                   >
                     <Loader class="w-3.5 h-3.5 text-[#888888]" />
@@ -755,7 +760,7 @@ async function handleDelete() {
                   <button
                     type="button"
                     @click="selectedStatus = 'approved'"
-                    class="py-2 px-2.5 rounded-lg font-semibold flex items-center justify-center gap-1.5 transition-all cursor-pointer border text-xs"
+                    class="py-2 px-2 rounded-lg font-semibold flex items-center justify-center gap-1.5 transition-all cursor-pointer border text-xs"
                     :class="selectedStatus === 'approved' ? 'bg-[#161618] text-emerald-400 border-emerald-500/50' : 'bg-[#161618] text-[#666666] border-[#333333]'"
                   >
                     <CheckCircle2 class="w-3.5 h-3.5 text-emerald-400" />
@@ -765,11 +770,21 @@ async function handleDelete() {
                   <button
                     type="button"
                     @click="selectedStatus = 'paid'"
-                    class="py-2 px-2.5 rounded-lg font-semibold flex items-center justify-center gap-1.5 transition-all cursor-pointer border text-xs"
+                    class="py-2 px-2 rounded-lg font-semibold flex items-center justify-center gap-1.5 transition-all cursor-pointer border text-xs"
                     :class="selectedStatus === 'paid' ? 'bg-[#161618] text-emerald-400 border-emerald-500/50' : 'bg-[#161618] text-[#666666] border-[#333333]'"
                   >
                     <CircleDollarSign class="w-3.5 h-3.5 text-emerald-400" />
                     <span>Paid</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    @click="selectedStatus = 'not_paid'"
+                    class="py-2 px-2 rounded-lg font-semibold flex items-center justify-center gap-1.5 transition-all cursor-pointer border text-xs"
+                    :class="selectedStatus === 'not_paid' ? 'bg-[#161618] text-rose-400 border-rose-500/50' : 'bg-[#161618] text-[#666666] border-[#333333]'"
+                  >
+                    <AlertCircle class="w-3.5 h-3.5 text-rose-400" />
+                    <span>Not Paid</span>
                   </button>
                 </div>
               </div>

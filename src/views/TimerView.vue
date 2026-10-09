@@ -8,7 +8,7 @@ import ActiveTimerCard from '@/components/timer/ActiveTimerCard.vue';
 import TimeEntrySlideOver from '@/components/timer/TimeEntrySlideOver.vue';
 import { formatDateShort, calculateDurationSeconds } from '@/lib/utils';
 import type { TimeEntry, Project } from '@/types';
-import { Play, Plus, Keyboard, Clock, CheckCircle2, CircleDollarSign, Loader, Loader2, Folder } from 'lucide-vue-next';
+import { Play, Plus, Keyboard, Clock, CheckCircle2, CircleDollarSign, AlertCircle, Loader, Loader2, Folder } from 'lucide-vue-next';
 
 const { currentSpace } = useSpace();
 const { isTimerRunning, checkActiveTimer, startTimer } = useTimer();
@@ -217,6 +217,9 @@ function openNewManualSlideOver() {
                       </template>
                       <template v-else-if="entry.status === 'paid'">
                         <CircleDollarSign class="w-4 h-4 text-emerald-400" title="Paid" />
+                      </template>
+                      <template v-else-if="entry.status === 'not_paid'">
+                        <AlertCircle class="w-4 h-4 text-rose-400" title="Not Paid" />
                       </template>
                       <template v-else>
                         <Loader class="w-4 h-4 text-[#888888]" title="Awaiting Approval" />

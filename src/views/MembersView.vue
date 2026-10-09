@@ -2,10 +2,12 @@
 import { ref, computed, watch, onMounted } from 'vue';
 import { useRouter, useRoute } from 'vue-router';
 import { useSpace } from '@/composables/useSpace';
+import { useTeams } from '@/composables/useTeams';
 import { useAuth } from '@/composables/useAuth';
 import { formatDateShort } from '@/lib/utils';
 import { formatDob, calculateAge } from '@/lib/billing';
 import StatsSlideOver from '@/components/stats/StatsSlideOver.vue';
+import TeamSlideOver from '@/components/teams/TeamSlideOver.vue';
 import {
   Search,
   Copy,
@@ -16,8 +18,13 @@ import {
   Trash2,
   Loader2,
   BarChart3,
+  Users2,
+  Users,
+  Plus,
+  Pencil,
+  RefreshCw,
 } from 'lucide-vue-next';
-import type { SpaceMember, Role } from '@/types';
+import type { SpaceMember, Role, SpaceTeam } from '@/types';
 
 const route = useRoute();
 const router = useRouter();
@@ -31,33 +38,75 @@ const {
   removeMember,
 } = useSpace();
 
+const {
+  teams,
+  isLoadingTeams,
+  fetchTeams,
+  deleteTeam,
+  syncTeamMembers,
+} = useTeams();
+
+// Tab state: 'members' | 'teams'
+const activeMainTab = ref<'members' | 'teams'>(
+  (route.query.tab === 'teams' || route.query.team) ? 'teams' : 'members'
+);
+
 const searchQuery = ref('');
 const isCopied = ref(false);
 const updatingMemberId = ref<string | null>(null);
+const syncToastMessage = ref<string | null>(null);
 
 // Member Stats SlideOver state
 const isMemberStatsOpen = ref(false);
 const selectedMemberForStats = ref<SpaceMember | null>(null);
+
+// Teams SlideOver / Drawer state
+const isTeamsDrawerOpen = ref(false);
+const selectedTeamIdForDrawer = ref<string | null>(null);
 
 function openMemberStats(member: SpaceMember) {
   selectedMemberForStats.value = member;
   isMemberStatsOpen.value = true;
 }
 
-onMounted(async () => {
-  if (currentSpace.value) {
-    await fetchSpaceMembers(currentSpace.value.id);
+function openTeamsDrawer(teamId: string | null = null) {
+  selectedTeamIdForDrawer.value = teamId;
+  isTeamsDrawerOpen.value = true;
+}
 
-    if (route.query.memberStats) {
-      const targetId = route.query.memberStats as string;
-      const found = spaceMembers.value.find((m) => m.user_id === targetId || m.id === targetId);
-      if (found) {
-        selectedMemberForStats.value = found;
-        isMemberStatsOpen.value = true;
+function closeTeamsDrawer() {
+  isTeamsDrawerOpen.value = false;
+  selectedTeamIdForDrawer.value = null;
+}
+
+watch(
+  () => currentSpace.value,
+  async (newSpace) => {
+    if (newSpace) {
+      await Promise.all([
+        fetchSpaceMembers(newSpace.id),
+        fetchTeams(newSpace.id),
+      ]);
+
+      if (route.query.memberStats) {
+        const targetId = route.query.memberStats as string;
+        const found = spaceMembers.value.find((m) => m.user_id === targetId || m.id === targetId);
+        if (found) {
+          selectedMemberForStats.value = found;
+          isMemberStatsOpen.value = true;
+        }
+      }
+
+      if (route.query.team) {
+        selectedTeamIdForDrawer.value = route.query.team as string;
+        isTeamsDrawerOpen.value = true;
+      } else if (route.query.teamsDrawer === 'open') {
+        isTeamsDrawerOpen.value = true;
       }
     }
-  }
-});
+  },
+  { immediate: true }
+);
 
 watch(
   () => route.query.memberStats,
@@ -75,6 +124,31 @@ watch(
   }
 );
 
+watch(
+  () => route.query.team,
+  (tId) => {
+    if (tId && typeof tId === 'string') {
+      selectedTeamIdForDrawer.value = tId;
+      isTeamsDrawerOpen.value = true;
+    }
+  }
+);
+
+watch(
+  () => route.query.tab,
+  (tab) => {
+    if (tab === 'teams' || tab === 'members') {
+      activeMainTab.value = tab;
+    }
+  }
+);
+
+function switchTab(tab: 'members' | 'teams') {
+  activeMainTab.value = tab;
+  searchQuery.value = '';
+  router.replace({ query: { ...route.query, tab } });
+}
+
 const filteredMembers = computed(() => {
   if (!searchQuery.value.trim()) return spaceMembers.value;
   const q = searchQuery.value.toLowerCase().trim();
@@ -82,6 +156,14 @@ const filteredMembers = computed(() => {
     const name = (m.profiles?.full_name || '').toLowerCase();
     const email = (m.profiles?.email || '').toLowerCase();
     return name.includes(q) || email.includes(q);
+  });
+});
+
+const filteredTeams = computed(() => {
+  if (!searchQuery.value.trim()) return teams.value;
+  const q = searchQuery.value.toLowerCase().trim();
+  return teams.value.filter((t: SpaceTeam) => {
+    return t.name.toLowerCase().includes(q);
   });
 });
 
@@ -119,151 +201,395 @@ async function handleRemoveMember(member: SpaceMember) {
     updatingMemberId.value = null;
   }
 }
+
+async function handleSyncTeam(team: SpaceTeam) {
+  const added = await syncTeamMembers(team.id, spaceMembers.value);
+  syncToastMessage.value = added > 0
+    ? `Synced ${team.name}: added ${added} member${added > 1 ? 's' : ''}`
+    : `Synced ${team.name}: up to date`;
+  setTimeout(() => {
+    syncToastMessage.value = null;
+  }, 3000);
+}
+
+async function handleDeleteTeam(team: SpaceTeam) {
+  if (confirm(`Delete team "${team.name}"?`)) {
+    await deleteTeam(team.id);
+  }
+}
+
+function getMemberAvatarUrl(m: SpaceMember | any): string | null {
+  if (!m) return null;
+  const prof = Array.isArray(m.profiles) ? m.profiles[0] : m.profiles;
+  return prof?.avatar_url || m.avatar_url || null;
+}
+
+function getMemberFullName(m: SpaceMember | any): string {
+  if (!m) return 'Member';
+  const prof = Array.isArray(m.profiles) ? m.profiles[0] : m.profiles;
+  return prof?.full_name || prof?.email || m.email || 'Member';
+}
+
+function getMemberInitial(m: SpaceMember | any): string {
+  const name = getMemberFullName(m);
+  return (name.charAt(0) || '?').toUpperCase();
+}
+
+function getMemberAge(m: SpaceMember | any): number | null {
+  if (!m) return null;
+  const prof = Array.isArray(m.profiles) ? m.profiles[0] : m.profiles;
+  return calculateAge(prof?.dob || m.dob);
+}
+
+function formatAgeRuleBadge(team: SpaceTeam): string {
+  if (team.min_age != null && team.max_age != null) {
+    return `${team.min_age} - ${team.max_age} yrs`;
+  } else if (team.min_age != null) {
+    return `${team.min_age}+ yrs`;
+  } else if (team.max_age != null) {
+    return `Up to ${team.max_age} yrs`;
+  }
+  return 'Custom';
+}
+
+function getTeamMembersList(team: SpaceTeam): SpaceMember[] {
+  return spaceMembers.value.filter((m) => team.member_ids.includes(m.user_id));
+}
 </script>
 
 <template>
   <div class="app max-w-3xl mx-auto px-4 sm:px-6 space-y-4" style="padding-bottom: calc(7rem + env(safe-area-inset-bottom));">
-    <!-- Heading matching TimerView style -->
-    <div class="flex justify-between items-baseline pt-2">
-      <span class="text-lg font-bold text-white">Members</span>
-      <span class="text-lg font-semibold text-white">{{ spaceMembers.length }}</span>
-    </div>
-
-    <!-- Space Join Code Card -->
-    <div
-      v-if="currentSpace"
-      class="bg-[#252525] border border-[#252525] rounded-lg px-4 py-3 flex items-center justify-between gap-3 shadow-lg"
-    >
-      <div class="min-w-0">
-        <div class="font-bold text-[#888888]">Space Code</div>
-        <div class="font-mono font-bold text-white tracking-wider truncate">
-          {{ currentSpace.join_code }}
-        </div>
+    <!-- Header with Title & Drawer Trigger Button -->
+    <div class="flex justify-between items-center pt-2">
+      <div class="flex items-center gap-2">
+        <h1 class="text-2xl font-bold text-white tracking-tight">
+          {{ activeMainTab === 'members' ? 'Members' : 'Teams' }}
+        </h1>
+        <span class="text-xs px-2 py-0.5 rounded-full bg-[#252525] text-[#888888] font-bold">
+          {{ activeMainTab === 'members' ? spaceMembers.length : teams.length }}
+        </span>
       </div>
 
+      <!-- Header Top Action Icon (Matching AppHeader and Project SlideOver aesthetics) -->
+      <div class="flex items-center gap-2">
+        <button
+          v-if="isOwner && activeMainTab === 'teams'"
+          @click="openTeamsDrawer(null)"
+          class="p-2 text-[#b3b3b3] border border-[#252525] active:scale-95 hover:text-white bg-[#1a1a1a] hover:bg-[#252525] rounded-lg transition-colors cursor-pointer flex items-center justify-center"
+          title="Create Team"
+        >
+          <Plus class="w-5 h-5 text-[#5bb8f5]" />
+        </button>
+      </div>
+    </div>
+
+    <!-- Segmented Tab Navigation: Members & Teams -->
+    <div v-if="isOwner" class="bg-[#252525] p-1 rounded-lg flex items-center justify-between gap-1">
       <button
-        @click="copyJoinCode"
-        class="h-10 px-4 bg-[#161618] hover:bg-[#202124] text-white border border-[#333333] active:scale-95 font-bold rounded-lg transition-all cursor-pointer flex items-center gap-2 shrink-0"
-        title="Copy Space Join Code"
+        @click="switchTab('members')"
+        class="flex-1 py-1.5 font-bold rounded-md transition-all flex items-center justify-center gap-2 cursor-pointer border text-sm"
+        :class="
+          activeMainTab === 'members'
+            ? 'bg-[#161618] text-white shadow-sm border-[#5bb8f5]/40 text-[#5bb8f5]'
+            : 'text-[#888888] hover:text-white border-transparent hover:bg-[#202022]'
+        "
       >
-        <Check v-if="isCopied" class="w-5 h-5 text-emerald-400" />
-        <Copy v-else class="w-5 h-5 text-[#888888]" />
-        <span>{{ isCopied ? 'Copied' : 'Copy' }}</span>
+        <Users class="w-4 h-4" />
+        <span>Members ({{ spaceMembers.length }})</span>
+      </button>
+
+      <button
+        @click="switchTab('teams')"
+        class="flex-1 py-1.5 font-bold rounded-md transition-all flex items-center justify-center gap-2 cursor-pointer border text-sm"
+        :class="
+          activeMainTab === 'teams'
+            ? 'bg-[#161618] text-white shadow-sm border-[#5bb8f5]/40 text-[#5bb8f5]'
+            : 'text-[#888888] hover:text-white border-transparent hover:bg-[#202022]'
+        "
+      >
+        <Users2 class="w-4 h-4" />
+        <span>Teams ({{ teams.length }})</span>
       </button>
     </div>
 
-    <!-- Search Input -->
-    <div class="relative w-full">
-      <Search class="w-4 h-4 text-[#888888] absolute left-3.5 top-1/2 -translate-y-1/2" />
-      <input
-        v-model="searchQuery"
-        type="text"
-        placeholder="Search members..."
-        class="w-full h-10 bg-[#161618] text-white rounded-lg pl-9 pr-3 border border-[#333333] focus:border-[#5bb8f5] focus:outline-none placeholder:text-[#666666] transition-colors"
-      />
-    </div>
-
-    <!-- Empty State -->
+    <!-- Sync Toast Alert -->
     <div
-      v-if="filteredMembers.length === 0"
-      class="py-10 bg-[#252525] border border-[#262930] rounded-lg text-center space-y-3 p-6"
+      v-if="syncToastMessage"
+      class="bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 p-2.5 rounded-lg text-xs flex items-center gap-2 transition-all"
     >
-      <div class="font-bold text-white">
-        No members found
-      </div>
+      <Check class="w-4 h-4 text-emerald-400 shrink-0" />
+      <span>{{ syncToastMessage }}</span>
     </div>
 
-    <!-- Members List -->
-    <div v-else class="space-y-3">
+    <!-- TAB CONTENT 1: MEMBERS -->
+    <div v-if="activeMainTab === 'members'" class="space-y-4">
+      <!-- Space Join Code Card -->
       <div
-        v-for="member in filteredMembers"
-        :key="member.id"
-        @click="openMemberStats(member)"
-        class="bg-[#252525] border border-[#252525] hover:border-[#5bb8f5]/40 rounded-lg p-4 transition-all hover:bg-[#2c2c2c] active:scale-[0.99] cursor-pointer shadow-lg flex flex-col sm:flex-row sm:items-center justify-between gap-3.5"
+        v-if="currentSpace"
+        class="bg-[#252525] border border-[#252525] rounded-lg px-4 py-3 flex items-center justify-between gap-3 shadow-lg"
       >
-        <!-- Member Avatar & Info (Clickable for Stats) -->
-        <div class="flex items-start sm:items-center gap-3.5 min-w-0 flex-1">
-          <div
-            class="w-11 h-11 rounded-full bg-[#161618] border border-[#333333] flex items-center justify-center font-bold text-white uppercase shrink-0"
-          >
-            {{ (member.profiles?.full_name || member.profiles?.email || 'M').charAt(0) }}
-          </div>
-
-          <div class="min-w-0 flex-1 space-y-0.5">
-            <div class="flex items-center gap-2">
-              <span class="font-bold text-white truncate">
-                {{ member.profiles?.full_name || 'Member' }}
-              </span>
-              <span v-if="member.user_id === user?.id" class="text-[#888888] font-bold">
-                (You)
-              </span>
-            </div>
-
-            <div class="text-[#888888] truncate">
-              {{ member.profiles?.email }}
-            </div>
-
-            <div v-if="isOwner" class="flex items-center gap-1.5 text-[#888888] pt-0.5">
-              <span v-if="member.profiles?.dob" class="text-white font-medium">
-                {{ formatDob(member.profiles.dob) }}
-                <span class="text-[#5bb8f5] font-semibold ml-1">
-                  ({{ calculateAge(member.profiles.dob) }} yrs)
-                </span>
-              </span>
-              <span v-else class="text-[#666666] italic">
-                No DOB set
-              </span>
-            </div>
+        <div class="min-w-0">
+          <div class="font-bold text-[#888888]">Space Code</div>
+          <div class="font-mono font-bold text-white tracking-wider truncate">
+            {{ currentSpace.join_code }}
           </div>
         </div>
 
-        <!-- Role & Actions (Mobile responsive bottom row / Desktop right) -->
-        <div
-          @click.stop
-          class="flex items-center justify-between sm:justify-end gap-2.5 pt-2.5 sm:pt-0 border-t border-[#333333]/40 sm:border-t-0 shrink-0"
+        <button
+          @click="copyJoinCode"
+          class="h-10 px-4 bg-[#161618] hover:bg-[#202124] text-white border border-[#333333] active:scale-95 font-bold rounded-lg transition-all cursor-pointer flex items-center gap-2 shrink-0"
+          title="Copy Space Join Code"
         >
-          <!-- Joined Date (on mobile and desktop) -->
-          <span class="text-[#888888] font-medium sm:hidden">
-            Joined {{ formatDateShort(member.joined_at) }}
-          </span>
+          <Check v-if="isCopied" class="w-5 h-5 text-emerald-400" />
+          <Copy v-else class="w-5 h-5 text-[#888888]" />
+          <span>{{ isCopied ? 'Copied' : 'Copy' }}</span>
+        </button>
+      </div>
 
-          <!-- Owner Editing Member Role -->
-          <div v-if="isOwner && member.role !== 'owner' && member.user_id !== user?.id" class="flex items-center gap-2">
-            <select
-              :value="member.role"
-              :disabled="updatingMemberId === member.id"
-              @change="handleRoleChange(member, ($event.target as HTMLSelectElement).value as Role)"
-              class="h-9 bg-[#161618] text-white border border-[#333333] rounded-lg px-3 focus:border-[#5bb8f5] focus:outline-none cursor-pointer font-bold capitalize"
-            >
-              <option value="member">Member</option>
-              <option value="co-owner">Co-Owner</option>
-            </select>
+      <!-- Search Input -->
+      <div class="relative w-full">
+        <Search class="w-4 h-4 text-[#888888] absolute left-3.5 top-1/2 -translate-y-1/2" />
+        <input
+          v-model="searchQuery"
+          type="text"
+          placeholder="Search members..."
+          class="w-full h-10 bg-[#161618] text-white rounded-lg pl-9 pr-3 border border-[#333333] focus:border-[#5bb8f5] focus:outline-none placeholder:text-[#666666] transition-colors"
+        />
+      </div>
 
-            <button
-              @click="handleRemoveMember(member)"
-              :disabled="updatingMemberId === member.id"
-              class="p-2 text-[#888888] hover:text-red-400 bg-[#161618] hover:bg-[#202124] border border-[#333333] rounded-lg transition-colors cursor-pointer"
-              title="Remove Member"
+      <!-- Empty State -->
+      <div
+        v-if="filteredMembers.length === 0"
+        class="py-10 bg-[#252525] border border-[#262930] rounded-lg text-center space-y-3 p-6"
+      >
+        <div class="font-bold text-white">
+          No members found
+        </div>
+      </div>
+
+      <!-- Members List -->
+      <div v-else class="space-y-3">
+        <div
+          v-for="member in filteredMembers"
+          :key="member.id"
+          @click="openMemberStats(member)"
+          class="bg-[#252525] border border-[#252525] hover:border-[#5bb8f5]/40 rounded-lg p-4 transition-all hover:bg-[#2c2c2c] active:scale-[0.99] cursor-pointer shadow-lg flex flex-col sm:flex-row sm:items-center justify-between gap-3.5"
+        >
+          <!-- Member Avatar & Info (Clickable for Stats) -->
+          <div class="flex items-start sm:items-center gap-3.5 min-w-0 flex-1">
+            <div
+              v-if="getMemberAvatarUrl(member)"
+              class="w-11 h-11 rounded-full overflow-hidden bg-[#2a2a2d] border border-[#444444] shrink-0"
             >
-              <Loader2 v-if="updatingMemberId === member.id" class="w-4 h-4 animate-spin text-[#888888]" />
-              <Trash2 v-else class="w-4 h-4" />
-            </button>
+              <img :src="getMemberAvatarUrl(member)!" alt="" class="w-full h-full object-cover" />
+            </div>
+            <div
+              v-else
+              class="w-11 h-11 rounded-full bg-[#161618] border border-[#333333] flex items-center justify-center font-bold text-white uppercase shrink-0 text-sm"
+            >
+              {{ getMemberInitial(member) }}
+            </div>
+
+            <div class="min-w-0 flex-1 space-y-0.5">
+              <div class="flex items-center gap-2">
+                <span class="font-bold text-white truncate">
+                  {{ getMemberFullName(member) }}
+                </span>
+                <span v-if="member.user_id === user?.id" class="text-[#888888] font-bold">
+                  (You)
+                </span>
+              </div>
+
+              <div class="text-[#888888] truncate">
+                {{ member.profiles?.email }}
+              </div>
+
+              <div v-if="isOwner" class="flex items-center gap-1.5 text-[#888888] pt-0.5">
+                <span v-if="getMemberAge(member) !== null" class="text-white font-medium">
+                  {{ formatDob(member.profiles?.dob) }}
+                  <span class="text-[#5bb8f5] font-semibold ml-1">
+                    ({{ getMemberAge(member) }} yrs)
+                  </span>
+                </span>
+                <span v-else class="text-[#666666] italic">
+                  No DOB set
+                </span>
+              </div>
+            </div>
           </div>
 
-          <!-- Static Role Badge -->
+          <!-- Role & Actions -->
           <div
-            v-else
-            class="px-3 py-1 rounded-lg border font-bold capitalize flex items-center gap-1.5 shrink-0"
-            :class="{
-              'bg-[#5bb8f5]/10 text-[#5bb8f5] border-[#5bb8f5]/30': member.role === 'owner',
-              'bg-emerald-500/10 text-emerald-400 border-emerald-500/30': member.role === 'co-owner',
-              'bg-[#161618] text-neutral-300 border-[#333333]': member.role === 'member',
-            }"
+            @click.stop
+            class="flex items-center justify-between sm:justify-end gap-2.5 pt-2.5 sm:pt-0 border-t border-[#333333]/40 sm:border-t-0 shrink-0"
           >
-            <Crown v-if="member.role === 'owner'" class="w-4 h-4" />
-            <ShieldCheck v-else-if="member.role === 'co-owner'" class="w-4 h-4" />
-            <User v-else class="w-4 h-4" />
-            <span>{{ member.role === 'co-owner' ? 'Co-Owner' : member.role }}</span>
+            <!-- Joined Date -->
+            <span class="text-[#888888] font-medium sm:hidden">
+              Joined {{ formatDateShort(member.joined_at) }}
+            </span>
+
+            <!-- Owner Editing Member Role -->
+            <div v-if="isOwner && member.role !== 'owner' && member.user_id !== user?.id" class="flex items-center gap-2">
+              <select
+                :value="member.role"
+                :disabled="updatingMemberId === member.id"
+                @change="handleRoleChange(member, ($event.target as HTMLSelectElement).value as Role)"
+                class="h-9 bg-[#161618] text-white border border-[#333333] rounded-lg px-3 focus:border-[#5bb8f5] focus:outline-none cursor-pointer font-bold capitalize"
+              >
+                <option value="member">Member</option>
+                <option value="co-owner">Co-Owner</option>
+              </select>
+
+              <button
+                @click="handleRemoveMember(member)"
+                :disabled="updatingMemberId === member.id"
+                class="p-2 text-[#888888] hover:text-red-400 bg-[#161618] hover:bg-[#202124] border border-[#333333] rounded-lg transition-colors cursor-pointer"
+                title="Remove Member"
+              >
+                <Loader2 v-if="updatingMemberId === member.id" class="w-4 h-4 animate-spin text-[#888888]" />
+                <Trash2 v-else class="w-4 h-4" />
+              </button>
+            </div>
+
+            <!-- Static Role Badge -->
+            <div
+              v-else
+              class="px-3 py-1 rounded-lg border font-bold capitalize flex items-center gap-1.5 shrink-0"
+              :class="{
+                'bg-[#5bb8f5]/10 text-[#5bb8f5] border-[#5bb8f5]/30': member.role === 'owner',
+                'bg-emerald-500/10 text-emerald-400 border-emerald-500/30': member.role === 'co-owner',
+                'bg-[#161618] text-neutral-300 border-[#333333]': member.role === 'member',
+              }"
+            >
+              <Crown v-if="member.role === 'owner'" class="w-4 h-4" />
+              <ShieldCheck v-else-if="member.role === 'co-owner'" class="w-4 h-4" />
+              <User v-else class="w-4 h-4" />
+              <span>{{ member.role === 'co-owner' ? 'Co-Owner' : member.role }}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB CONTENT 2: TEAMS LIST -->
+    <div v-else-if="activeMainTab === 'teams'" class="space-y-4">
+      <!-- Search Teams Input -->
+      <div class="relative w-full">
+        <Search class="w-4 h-4 text-[#888888] absolute left-3.5 top-1/2 -translate-y-1/2" />
+        <input
+          v-model="searchQuery"
+          type="text"
+          placeholder="Search teams..."
+          class="w-full h-10 bg-[#161618] text-white rounded-lg pl-9 pr-3 border border-[#333333] focus:border-[#5bb8f5] focus:outline-none placeholder:text-[#666666] transition-colors"
+        />
+      </div>
+
+      <!-- Empty State -->
+      <div
+        v-if="!isLoadingTeams && filteredTeams.length === 0"
+        class="py-10 bg-[#252525] border border-[#262930] rounded-lg text-center space-y-3 p-6"
+      >
+        <Users2 class="w-8 h-8 text-[#555555] mx-auto" />
+        <div class="font-bold text-white">
+          No teams found
+        </div>
+        <button
+          @click="openTeamsDrawer(null)"
+          class="h-9 px-4 font-bold text-white hover:text-[#5bb8f5] border border-[#333333] active:scale-95 bg-[#161618] hover:bg-[#252525] rounded-lg transition-colors cursor-pointer inline-flex items-center gap-1.5 text-xs mx-auto"
+        >
+          <Plus class="w-4 h-4 text-[#5bb8f5]" />
+          <span>New Team</span>
+        </button>
+      </div>
+
+      <!-- Teams List Cards (Matching latest user styling) -->
+      <div v-else class="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div
+          v-for="team in filteredTeams"
+          :key="team.id"
+          class="bg-[#1e1e20] border border-[#333333] rounded-lg p-4 sm:p-5 space-y-4 shadow-xl flex flex-col justify-between"
+        >
+          <div class="space-y-3">
+            <!-- Card Header -->
+            <div class="flex items-start justify-between gap-2">
+              <div class="min-w-0 flex-1">
+                <h2 class="text-xl font-bold text-white line-clamp-2 truncate">
+                  {{ team.name }}
+                </h2>
+                <div class="flex items-center gap-2 pt-1 flex-wrap">
+                  <span class="inline-flex items-center px-2 py-0.5 rounded-sm text-sm font-semibold bg-[#5bb8f5]/10 text-[#5bb8f5]">
+                    {{ formatAgeRuleBadge(team) }}
+                  </span>
+                  <span class="text-[#888888] text-sm">
+                    {{ team.member_ids.length }} {{ team.member_ids.length === 1 ? 'member' : 'members' }}
+                  </span>
+                </div>
+              </div>
+
+              <div class="flex items-center gap-1 shrink-0">
+                <button
+                  @click="handleSyncTeam(team)"
+                  class="p-1.5 text-[#888888] hover:text-white hover:bg-[#252525] rounded-lg transition-colors cursor-pointer"
+                  title="Sync"
+                >
+                  <RefreshCw class="w-5 h-5" />
+                </button>
+                <button
+                  @click="openTeamsDrawer(team.id)"
+                  class="p-1.5 text-[#888888] hover:text-white hover:bg-[#252525] rounded-lg transition-colors cursor-pointer"
+                  title="Edit Team"
+                >
+                  <Pencil class="w-5 h-5" />
+                </button>
+                <button
+                  @click="handleDeleteTeam(team)"
+                  class="p-1.5 text-[#888888] hover:text-rose-400 hover:bg-[#252525] rounded-lg transition-colors cursor-pointer"
+                  title="Delete Team"
+                >
+                  <Trash2 class="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+
+            <!-- Members List Preview -->
+            <div class="space-y-1.5 pt-2">
+              <div v-if="team.member_ids.length > 0" class="space-y-1 max-h-48 overflow-y-auto pr-1">
+                <div
+                  v-for="m in getTeamMembersList(team)"
+                  :key="m.id"
+                  class="flex items-center justify-between py-1.5"
+                >
+                  <div class="flex items-center gap-2.5 min-w-0">
+                    <div
+                      v-if="getMemberAvatarUrl(m)"
+                      class="w-9 h-9 rounded-full overflow-hidden bg-[#2a2a2d] border border-[#444444] shrink-0"
+                    >
+                      <img :src="getMemberAvatarUrl(m)!" alt="" class="w-full h-full object-cover" />
+                    </div>
+                    <div
+                      v-else
+                      class="w-9 h-9 rounded-full bg-[#161618] border border-[#333333] flex items-center justify-center font-bold text-white uppercase shrink-0 text-xs"
+                    >
+                      {{ getMemberInitial(m) }}
+                    </div>
+                    <span class="text-white truncate font-medium text-sm">
+                      {{ getMemberFullName(m) }}
+                    </span>
+                  </div>
+
+                  <div class="text-white shrink-0 text-sm font-mono">
+                    <span v-if="getMemberAge(m) != null">
+                      {{ getMemberAge(m) }}y
+                    </span>
+                    <span v-else class="text-[#555555]">-</span>
+                  </div>
+                </div>
+              </div>
+
+              <div v-else class="text-xs text-[#666666] italic py-2">
+                No members assigned yet.
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -275,6 +601,14 @@ async function handleRemoveMember(member: SpaceMember) {
       :member="selectedMemberForStats"
       :user-id="selectedMemberForStats?.user_id"
       @close="isMemberStatsOpen = false; selectedMemberForStats = null;"
+    />
+
+    <!-- Teams SlideOver Drawer Component (Matching ProjectSlideOver design system) -->
+    <TeamSlideOver
+      :is-open="isTeamsDrawerOpen"
+      :team-id="selectedTeamIdForDrawer"
+      @close="closeTeamsDrawer"
+      @update:team-id="selectedTeamIdForDrawer = $event"
     />
   </div>
 </template>

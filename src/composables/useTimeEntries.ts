@@ -2,11 +2,13 @@ import { ref, computed } from 'vue';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from './useAuth';
 import { useSpace } from './useSpace';
-import type { TimeEntry } from '@/types';
+import type { TimeEntry, EntryStatus } from '@/types';
 
 const userEntries = ref<TimeEntry[]>([]);
 const spaceTeamEntries = ref<TimeEntry[]>([]);
+const activeTimers = ref<TimeEntry[]>([]);
 const isLoadingEntries = ref<boolean>(true);
+const isLoadingActiveTimers = ref<boolean>(false);
 const isLoadingMoreUserEntries = ref<boolean>(false);
 const hasMoreUserEntries = ref<boolean>(true);
 const isLoadingMoreTeamEntries = ref<boolean>(false);
@@ -14,6 +16,7 @@ const hasMoreTeamEntries = ref<boolean>(true);
 const entriesError = ref<string | null>(null);
 
 const PAGE_SIZE = 100;
+const TEAM_PAGE_SIZE = 1000;
 
 export function useTimeEntries() {
   const { user } = useAuth();
@@ -92,7 +95,7 @@ export function useTimeEntries() {
 
     try {
       const from = isInitial ? 0 : spaceTeamEntries.value.length;
-      const to = from + PAGE_SIZE - 1;
+      const to = from + TEAM_PAGE_SIZE - 1;
 
       const { data, error } = await supabase
         .from('time_entries')
@@ -111,7 +114,7 @@ export function useTimeEntries() {
         spaceTeamEntries.value = [...spaceTeamEntries.value, ...fetched];
       }
 
-      hasMoreTeamEntries.value = fetched.length === PAGE_SIZE;
+      hasMoreTeamEntries.value = fetched.length === TEAM_PAGE_SIZE;
     } catch (err: any) {
       entriesError.value = err.message || 'Failed to fetch space entries';
     } finally {
@@ -126,7 +129,7 @@ export function useTimeEntries() {
     startedAt: string;
     endedAt: string;
     notes?: string;
-    status?: 'awaiting' | 'approved' | 'paid';
+    status?: EntryStatus;
   }): Promise<boolean> {
     if (!user.value || !currentSpace.value) {
       entriesError.value = 'Space selection required';
@@ -183,7 +186,7 @@ export function useTimeEntries() {
       startedAt?: string;
       endedAt?: string;
       notes?: string;
-      status?: 'awaiting' | 'approved' | 'paid';
+      status?: EntryStatus;
     }
   ): Promise<boolean> {
     const existing = userEntries.value.find((e) => e.id === id)
@@ -230,7 +233,7 @@ export function useTimeEntries() {
     }
   }
 
-  async function patchEntryStatus(id: string, status: 'awaiting' | 'approved' | 'paid'): Promise<void> {
+  async function patchEntryStatus(id: string, status: EntryStatus): Promise<void> {
     const userIdx = userEntries.value.findIndex((e) => e.id === id);
     const spaceIdx = spaceTeamEntries.value.findIndex((e) => e.id === id);
     const prevStatus = userIdx !== -1
@@ -249,6 +252,95 @@ export function useTimeEntries() {
     } catch {
       if (userIdx !== -1) userEntries.value[userIdx] = { ...userEntries.value[userIdx], status: prevStatus };
       if (spaceIdx !== -1) spaceTeamEntries.value[spaceIdx] = { ...spaceTeamEntries.value[spaceIdx], status: prevStatus };
+    }
+  }
+
+  async function bulkUpdateStatus(ids: string[], status: EntryStatus): Promise<boolean> {
+    if (ids.length === 0) return true;
+    const targetSpaceId = currentSpace.value?.id;
+    if (!targetSpaceId) return false;
+
+    const prevMap = new Map<string, EntryStatus | undefined>();
+    ids.forEach((id) => {
+      const found = spaceTeamEntries.value.find((e) => e.id === id);
+      if (found) prevMap.set(id, found.status);
+    });
+
+    spaceTeamEntries.value = spaceTeamEntries.value.map((e) => {
+      if (ids.includes(e.id)) {
+        return { ...e, status };
+      }
+      return e;
+    });
+
+    userEntries.value = userEntries.value.map((e) => {
+      if (ids.includes(e.id)) {
+        return { ...e, status };
+      }
+      return e;
+    });
+
+    try {
+      const { error } = await supabase
+        .from('time_entries')
+        .update({ status, updated_at: new Date().toISOString() })
+        .in('id', ids);
+
+      if (error) throw error;
+      return true;
+    } catch (err: any) {
+      spaceTeamEntries.value = spaceTeamEntries.value.map((e) => {
+        if (prevMap.has(e.id)) {
+          return { ...e, status: prevMap.get(e.id) };
+        }
+        return e;
+      });
+      userEntries.value = userEntries.value.map((e) => {
+        if (prevMap.has(e.id)) {
+          return { ...e, status: prevMap.get(e.id) };
+        }
+        return e;
+      });
+      entriesError.value = err.message || 'Failed to bulk update status';
+      return false;
+    }
+  }
+
+  async function fetchAllSpaceTeamEntries(spaceId?: string): Promise<void> {
+    const targetSpaceId = spaceId || currentSpace.value?.id;
+    if (!targetSpaceId) return;
+
+    if (spaceTeamEntries.value.length === 0) {
+      await fetchSpaceTeamEntries(targetSpaceId, true);
+    }
+
+    while (hasMoreTeamEntries.value && !isLoadingMoreTeamEntries.value) {
+      await fetchSpaceTeamEntries(targetSpaceId, false);
+    }
+  }
+
+  async function fetchActiveTimers(spaceId?: string): Promise<void> {
+    const targetSpaceId = spaceId || currentSpace.value?.id;
+    if (!targetSpaceId) {
+      activeTimers.value = [];
+      return;
+    }
+
+    isLoadingActiveTimers.value = true;
+    try {
+      const { data, error } = await supabase
+        .from('time_entries')
+        .select('*, projects (*), tasks (*), profiles (*)')
+        .eq('space_id', targetSpaceId)
+        .is('ended_at', null)
+        .order('started_at', { ascending: false });
+
+      if (error) throw error;
+      activeTimers.value = (data as TimeEntry[]) || [];
+    } catch (err: any) {
+      console.error('Failed to fetch active timers:', err);
+    } finally {
+      isLoadingActiveTimers.value = false;
     }
   }
 
@@ -281,8 +373,10 @@ export function useTimeEntries() {
   return {
     userEntries,
     spaceTeamEntries,
+    activeTimers,
     todayEntries,
     isLoadingEntries,
+    isLoadingActiveTimers,
     isLoadingMoreUserEntries,
     hasMoreUserEntries,
     isLoadingMoreTeamEntries,
@@ -290,9 +384,12 @@ export function useTimeEntries() {
     entriesError,
     fetchUserEntries,
     fetchSpaceTeamEntries,
+    fetchAllSpaceTeamEntries,
+    fetchActiveTimers,
     addManualEntry,
     updateEntry,
     patchEntryStatus,
+    bulkUpdateStatus,
     deleteEntry,
   };
 }

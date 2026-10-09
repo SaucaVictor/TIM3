@@ -26,7 +26,22 @@ export interface SpaceMember {
   profiles?: Profile;
 }
 
-export type EntryStatus = 'awaiting' | 'approved' | 'paid';
+export type EntryStatus = 'awaiting' | 'approved' | 'paid' | 'not_paid';
+
+export interface SpaceTeam {
+  id: string;
+  space_id: string;
+  name: string;
+  min_age?: number | null;
+  max_age?: number | null;
+  member_ids: string[];
+  created_at: string;
+  updated_at?: string;
+}
+
+export interface LiveTimerEntry extends TimeEntry {
+  elapsedSeconds?: number;
+}
 
 export type AgeOperator = '<' | '<=' | '>' | '>=' | '==' | '!=';
 

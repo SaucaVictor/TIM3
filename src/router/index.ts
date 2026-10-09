@@ -5,9 +5,11 @@ import { useSpace } from '@/composables/useSpace';
 import LoginView from '@/views/LoginView.vue';
 import SpaceSelectView from '@/views/SpaceSelectView.vue';
 import TimerView from '@/views/TimerView.vue';
+import LiveView from '@/views/LiveView.vue';
 import DashboardView from '@/views/DashboardView.vue';
 import ProjectsView from '@/views/ProjectsView.vue';
 import MembersView from '@/views/MembersView.vue';
+import TeamsView from '@/views/TeamsView.vue';
 
 const routes: Array<RouteRecordRaw> = [
   {
@@ -29,6 +31,12 @@ const routes: Array<RouteRecordRaw> = [
     meta: { requiresAuth: true, requiresSpace: true },
   },
   {
+    path: '/live',
+    name: 'live',
+    component: LiveView,
+    meta: { requiresAuth: true, requiresSpace: true },
+  },
+  {
     path: '/dashboard',
     name: 'dashboard',
     component: DashboardView,
@@ -45,6 +53,10 @@ const routes: Array<RouteRecordRaw> = [
     name: 'members',
     component: MembersView,
     meta: { requiresAuth: true, requiresSpace: true, requiresOwner: true },
+  },
+  {
+    path: '/teams',
+    redirect: '/members?tab=teams',
   },
   {
     path: '/:pathMatch(.*)*',

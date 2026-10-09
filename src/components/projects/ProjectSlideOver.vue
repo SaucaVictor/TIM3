@@ -308,6 +308,8 @@ const analyticsData = computed(() => {
     } else if (status === 'approved') {
       approvedEarnings += earnings;
       approvedMinutes += durationMinutes;
+    } else if (status === 'not_paid') {
+      // Not paid - do not count towards awaiting
     } else {
       awaitingEarnings += earnings;
       awaitingMinutes += durationMinutes;

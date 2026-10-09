@@ -19,6 +19,8 @@ import {
   Rocket,
   Loader2,
   Calendar,
+  Radio,
+  Users2,
 } from 'lucide-vue-next';
 import { calculateAge, formatDob } from '@/lib/billing';
 
@@ -57,6 +59,7 @@ useSwipeGesture(drawerRef, {
 const navigationItems = computed(() => {
   const items = [
     { label: 'Time Tracker', path: '/', icon: Clock },
+    { label: 'Live', path: '/live', icon: Radio },
     { label: 'Spaces', path: '/spaces', icon: Rocket },
   ];
 
@@ -268,7 +271,13 @@ function getUserInitials(): string {
             <div class="bg-[#252525] p-4 rounded-lg space-y-3">
               <!-- Name & Role Row -->
               <div class="flex items-center gap-2.5">
-                <div class="w-10 h-10 rounded-full bg-[#5bb8f5]/20 text-[#5bb8f5] font-bold flex items-center justify-center tracking-tight shrink-0 border border-[#5bb8f5]/30">
+                <div
+                  v-if="profile?.avatar_url"
+                  class="w-10 h-10 rounded-full overflow-hidden bg-[#2a2a2d] border border-[#444444] shrink-0"
+                >
+                  <img :src="profile.avatar_url" alt="" class="w-full h-full object-cover" />
+                </div>
+                <div v-else class="w-10 h-10 rounded-full bg-[#5bb8f5]/20 text-[#5bb8f5] font-bold flex items-center justify-center tracking-tight shrink-0 border border-[#5bb8f5]/30">
                   {{ getUserInitials() }}
                 </div>
 
